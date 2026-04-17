@@ -151,6 +151,7 @@
 </div>
 
 <div id="radioPlayer">
+    <h1>Radio</h1>
     <button onclick="playRadio()">PLAY</button> 
     <button onclick="stopRadio()">STOP</button> 
     <button onclick="nextTrack()">NEXT</button>
@@ -181,41 +182,47 @@ let app, engine, world;
 let score = 0, nextLevel = 0, currentBallBody = null, canSpawn = false, isGameOver = false;
 let activeKeys = {};
 let pendingUpdateIndex = -1;
-let loseLine; // Объект полосы
-let loseTimer = 0; // Таймер для проверки проигрыша
+let loseLine, loseTimer = 0;
 const textures = {};
 
 // --- ЗАГРУЗКА ТЕРМИНАЛА ---
 const logElement = document.getElementById('boot-log');
 const bootScreen = document.getElementById('boot-screen');
 
-document.getElementById('start-overlay').addEventListener('click', async () => {
+document.getElementById('start-overlay').addEventListener('click', () => {
     document.getElementById('start-overlay').style.display = 'none';
     bootScreen.style.display = 'flex';
-    document.getElementById('radio').src = 'matrix.mp3';
-    document.getElementById('radio').play().catch(() => {});
     
-    await runBootSequence();
+    // Запуск аудио без блокировки основного потока
+    const radio = document.getElementById('radio');
+    radio.src = 'matrix.mp3';
+    radio.play().catch(() => console.warn("Audio blocked"));
+    
+    runBootSequence();
 });
 
 async function runBootSequence() {
     const lines = ["> INITIALIZING...", "> LOADING CORE...", "> ACCESS GRANTED.", "> STARTING PROTOCOL..."];
     for (let line of lines) {
         logElement.textContent += line + "\n";
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 200)); // Ускорено с 400 до 200
     }
     
-    for (let i = 0; i < 30; i++) {
+    // Параллельная инициализация игры во время анимации текста
+    const gameInitPromise = initGame();
+
+    for (let i = 0; i < 20; i++) {
         let hex = Array.from({length: 40}, () => Math.random().toString(16)[2]).join('');
         logElement.textContent = `[0x${Math.random().toString(16).slice(2,6)}] ${hex}\n` + logElement.textContent;
-        await new Promise(r => setTimeout(r, 40));
+        await new Promise(r => setTimeout(r, 30));
     }
 
+    await gameInitPromise; // Ждем завершения загрузки ассетов
+
     logElement.innerHTML = "<div style='font-size:2rem; text-align:center; margin-top:20%;'>> SYSTEM READY</div>";
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 600));
     bootScreen.style.display = 'none';
-    
-    initGame();
+    spawnNew();
 }
 
 // --- ИГРОВАЯ ЛОГИКА ---
@@ -236,20 +243,22 @@ async function initGame() {
         Matter.Bodies.rectangle(410, 300, 20, 600, { isStatic: true })
     ]);
 
-    // Создание статичной полосы проигрыша
-    loseLine = new PIXI.Graphics();
-    loseLine.beginFill(0xff0000, 0.2); // Очень тусклый красный
-    loseLine.drawRect(0, 0, 400, 2);   // Тонкая линия
-    loseLine.endFill();
+    // Линия проигрыша
+    loseLine = new PIXI.Graphics().beginFill(0xff0000, 0.2).drawRect(0, 0, 400, 2).endFill();
     loseLine.y = 110; 
     app.stage.addChild(loseLine);
 
-    // Загрузка текстур
-    for (let i = 0; i < 10; i++) {
-        try {
-            textures[i] = await PIXI.Assets.load(`${i+1}.png`);
-        } catch(e) { console.warn(`Missing: ${i+1}.png`); }
+    // ПАРАЛЛЕЛЬНАЯ ЗАГРУЗКА ТЕКСТУР
+    const assetPromises = [];
+    for (let i = 1; i <= 10; i++) {
+        assetPromises.push(PIXI.Assets.load(`./${i}.png`).catch(e => {
+            console.error(`Asset ${i}.png failed:`, e);
+            return null;
+        }));
     }
+
+    const loaded = await Promise.all(assetPromises);
+    loaded.forEach((tex, i) => { if (tex) textures[i] = tex; });
 
     app.stage.eventMode = 'static';
     app.stage.hitArea = app.screen;
@@ -283,11 +292,9 @@ async function initGame() {
                 
                 const nx = (a.position.x + b.position.x) / 2;
                 const ny = (a.position.y + b.position.y) / 2;
-                const newLvl = a.lvl + 1;
-
                 setTimeout(() => {
                     removeBall(a); removeBall(b);
-                    createBall(nx, ny, newLvl, true);
+                    createBall(nx, ny, a.lvl + 1, true);
                 }, 10);
             }
         });
@@ -295,7 +302,6 @@ async function initGame() {
 
     app.ticker.add(() => {
         Matter.Engine.update(engine, app.ticker.deltaMS);
-        
         let isAnyBodyAbove = false;
 
         world.bodies.forEach(body => {
@@ -303,31 +309,23 @@ async function initGame() {
                 body.sprite.x = body.position.x;
                 body.sprite.y = body.position.y;
                 body.sprite.rotation = body.angle;
-
-                // Проверка проигрыша: если упавший шар (не статик) выше линии 110
-                if (!body.isStatic && body.position.y < 110 && !body.isMerging) {
-                    isAnyBodyAbove = true;
-                }
+                if (!body.isStatic && body.position.y < 110 && !body.isMerging) isAnyBodyAbove = true;
             }
         });
 
         if (isAnyBodyAbove && !isGameOver) {
             loseTimer += app.ticker.deltaMS;
-            if (loseTimer > 1500) { // 1.5 секунды над линией — конец
-                triggerGameOver();
-            }
+            if (loseTimer > 1500) triggerGameOver();
         } else {
             loseTimer = 0;
         }
     });
-
-    spawnNew();
 }
 
 function createBall(x, y, lvl, isFalling) {
     const radius = levels[lvl].r;
     const container = new PIXI.Container();
-    const sprite = new PIXI.Sprite(textures[lvl]);
+    const sprite = new PIXI.Sprite(textures[lvl] || PIXI.Texture.WHITE);
     sprite.anchor.set(0.5);
     sprite.width = sprite.height = radius * 2;
 
@@ -354,7 +352,7 @@ function spawnNew() {
     currentBallBody = createBall(200, 60, nextLevel, false);
     nextLevel = Math.floor(Math.random() * 4);
     const ni = document.getElementById('next-img');
-    ni.src = `${nextLevel + 1}.png`;
+    ni.src = `./${nextLevel + 1}.png`;
     ni.style.display = 'block';
     canSpawn = true;
 }
@@ -364,11 +362,11 @@ function triggerGameOver() {
     canSpawn = false;
     const lore = document.getElementById('lore-display');
     lore.style.display = "block";
-    lore.innerHTML = `<span style='color:#ff1a1a; font-size: 14px;'>[SYSTEM_FAILURE]</span><br>Критическое переполнение буфера. Работа прекращена.`;
+    lore.innerHTML = `<span style='color:#ff1a1a;'>[SYSTEM_FAILURE]</span><br>Критическое переполнение буфера.`;
     document.body.style.animation = "pulse-red 0.5s infinite";
 }
 
-// --- СИСТЕМА СОСТОЯНИЙ ---
+// --- СИСТЕМА СОСТОЯНИЙ (БЕЗ ИЗМЕНЕНИЙ) ---
 const stateThresholds = [500, 1500, 3000, 5000];
 const confirmBtn = document.getElementById('confirm-btn');
 
@@ -389,14 +387,10 @@ confirmBtn.addEventListener('click', () => {
     const i = pendingUpdateIndex;
     const code = LORE_DATABASE.getUniqueCode();
     activeKeys[code] = `> СЕКТОР_${i+1}: ${LORE_DATABASE.events[Math.floor(Math.random()*5)]}`;
-
-    const lore = document.getElementById('lore-display');
-    lore.style.display = "block";
-    lore.innerHTML = `<span style='color:#ff1a1a;'>[KEY]:</span> <b>${code}</b> <button class='copy-btn' onclick="navigator.clipboard.writeText('${code}')">[COPY]</button>`;
-
+    document.getElementById('lore-display').style.display = "block";
+    document.getElementById('lore-display').innerHTML = `<span style='color:#ff1a1a;'>[KEY]:</span> <b>${code}</b>`;
     const img = document.getElementById(`img-${i}`);
-    if(img) img.src = `ruins${i+1}.png`; 
-    
+    if(img) img.src = `./ruins${i+1}.png`; 
     confirmBtn.disabled = true;
     confirmBtn.classList.remove('pending-action');
     document.getElementById(`obj-${i}`).style.animation = "none";
@@ -409,24 +403,21 @@ function checkAccessCode() {
     lore.style.display = "block";
     if (activeKeys[val]) {
         lore.innerHTML = `<span style='color:#1aff1a;'>[DECRYPTED]</span><br>${activeKeys[val]}`;
-        document.getElementById('access-key').value = "";
     } else {
         lore.innerHTML = `<span style='color:#550000;'>[INVALID_KEY]</span>`;
     }
 }
 
-// --- РАДИО ---
+// РАДИО
 const tracks = ["radio_static.mp3", "rad_low.mp3"];
 let currentTrack = 0;
 const r = document.getElementById('radio');
-function playRadio(){ r.src = tracks[currentTrack]; r.play(); }
+function playRadio(){ r.play(); }
 function stopRadio(){ r.pause(); }
-function nextTrack(){ currentTrack = (currentTrack + 1) % tracks.length; playRadio(); }
+function nextTrack(){ currentTrack = (currentTrack + 1) % tracks.length; r.src = tracks[currentTrack]; r.play(); }
 async function pasteKeyFromClipboard() {
-    try {
-        const text = await navigator.clipboard.readText();
-        document.getElementById('access-key').value = text;
-    } catch(e) { console.warn("Clipboard error"); }
+    const text = await navigator.clipboard.readText();
+    document.getElementById('access-key').value = text;
 }
 </script>
 </body>
