@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>System Terminal: Core Protocol v3</title>
+    <script src="https://pixijs.download/v7.x/pixi.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <style>
+        body { 
+            margin: 0; padding: 20px; width: 100vw; min-height: 100vh; 
+            background-color: #001100;
+            background-image: 
+                radial-gradient(rgba(0, 150, 0, 0.2), black),
+                linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%),
+                linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+            background-size: 100% 100%, 100% 4px, 3px 100%;
+            color: #1aff1a; font-family: 'Courier New', Courier, monospace; 
+            display: flex; flex-direction: column; align-items: center;
+            overflow-y: auto; box-sizing: border-box; touch-action: pan-y; 
+        }
+
+        #start-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 17, 0, 0.95); z-index: 10005;
+            display: flex; flex-direction: column; justify-content: center; align-items: center; cursor: pointer;
+        }
+
+        .blink-text { font-size: 1.5rem; letter-spacing: 5px; animation: blinker 1.5s linear infinite; }
+        @keyframes blinker { 50% { opacity: 0; } }
+
+        #boot-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #001100; color: #1aff1a; padding: 20px;
+            z-index: 9999; display: none; flex-direction: column; text-shadow: 0 0 5px #1aff1a;
+        }
+
+        #boot-log { white-space: pre-wrap; line-height: 1.4; font-size: 12px; }
+
+        h1 { margin: 15px 0; font-size: 1.2rem; text-align: center; letter-spacing: 2px; }
+
+        #ui-wrapper { display: flex; gap: 20px; justify-content: center; align-items: flex-start; width: 100%; max-width: 1200px; margin-bottom: 20px; }
+        
+        .info-panel { 
+            width: 260px; min-height: 600px; border: 2px solid #1aff1a; padding: 15px; 
+            background: rgba(0, 10, 0, 0.8); text-shadow: 0 0 5px #1aff1a; 
+            box-sizing: border-box; flex-shrink: 0; display: flex; flex-direction: column; 
+        }
+
+        .panel-title { text-align: center; margin: 0 0 15px 0; font-size: 1.2rem; letter-spacing: 2px; border-bottom: 1px solid #1aff1a; padding-bottom: 5px; }
+        
+        #game-container { 
+            border: 2px solid #1aff1a; box-shadow: 0 0 15px #1aff1a55; 
+            background: rgba(0, 20, 0, 0.4); width: 400px; height: 600px; 
+            position: relative; touch-action: none;
+        }
+
+        #game-container canvas { display: block; width: 100%; height: 100%; }
+
+        .monitors-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 10px; }
+        .object-monitor { 
+            width: 100%; aspect-ratio: 1/1; border: 1px solid #1aff1a; 
+            background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden;
+        }
+        .object-monitor img { max-width: 90%; max-height: 90%; filter: brightness(1.2); }
+
+        .score-item { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 14px; border-bottom: 1px dashed #1aff1a33; }
+        
+        #next-preview { width: 100px; height: 100px; border: 1px solid #1aff1a; margin: 10px auto; display: flex; align-items: center; justify-content: center; background: #000; }
+        #next-img { max-width: 80px; max-height: 80px; }
+
+        #confirm-btn {
+            width: 100%; margin-bottom: 15px; padding: 12px; background: #000;
+            color: #004400; border: 2px solid #004400; font-family: 'Courier New', monospace;
+            font-weight: bold; text-transform: uppercase; cursor: default;
+        }
+        #confirm-btn.pending-action {
+            color: #ff1a1a; border-color: #ff1a1a; cursor: pointer;
+            box-shadow: 0 0 10px #ff1a1a; animation: pulse-border 1s infinite;
+        }
+
+        #lore-display {
+            max-height: 180px; overflow-y: auto; font-size: 11px; margin-top: 15px; 
+            padding: 10px; background: rgba(0,20,0,0.5); border: 1px solid #1aff1a33; display: none;
+        }
+
+        #radioPlayer { width: 400px; background: #000; border: 2px solid #1aff1a; padding: 15px; margin-top: 20px; display: flex; justify-content: center; gap: 20px; }
+        button { background: black; border: 1px solid #1aff1a; color: #1aff1a; padding: 5px 10px; cursor: pointer; font-family: 'Courier New'; }
+
+        @keyframes pulse-border { 50% { opacity: 0.5; } }
+        @keyframes pulse-red { 50% { border-color: #ff0000; } }
+
+        .copy-btn { border: 1px solid #1aff1a; background: transparent; color: #1aff1a; font-size: 10px; cursor: pointer; margin-left: 5px; }
+
+        @media screen and (max-width: 1000px) {
+            #ui-wrapper { flex-direction: column; align-items: center; }
+            .info-panel { width: 400px; min-height: auto; }
+            #game-container { order: -1; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="start-overlay">
+    <div class="blink-text">[ CLICK TO INITIALIZE SYSTEM ]</div>
+</div>
+
+<div id="boot-screen">
+    <div id="boot-log"></div>
+</div>
+
+<h1>> SYSTEM_CORE_ONLINE</h1>
+
+<div id="ui-wrapper">
+    <div class="info-panel">
+        <h2 class="panel-title">ПРОТОКОЛ</h2>
+        <div class="score-item"><span>SCORE:</span><span id="current-score">0</span></div>
+        <div class="score-item"><span>RECORD:</span><span id="best-score">0</span></div>
+        
+        <div id="lore-display"></div>
+
+        <div style="margin-top: auto; text-align: center;">
+            <div style="font-size: 12px;">NEXT_UNIT:</div>
+            <div id="next-preview"><img id="next-img" src="" style="display:none;"></div>
+        </div>
+    </div>
+
+    <div id="game-container"></div>
+
+    <div class="info-panel">
+        <h2 class="panel-title">DATA</h2>
+        <button id="confirm-btn" disabled>LAUNCH</button>
+        
+        <div style="font-size: 11px; color: #1aff1a; text-align: center;">OBJECT_STATUS:</div>
+        <div class="monitors-grid">
+            <div class="object-monitor" id="obj-0"><img src="city1.png" id="img-0"></div>
+            <div class="object-monitor" id="obj-1"><img src="city2.png" id="img-1"></div>
+            <div class="object-monitor" id="obj-2"><img src="city3.png" id="img-2"></div>
+            <div class="object-monitor" id="obj-3"><img src="city4.png" id="img-3"></div>
+        </div>
+
+        <div id="decryption-sector" style="margin-top: 20px;">
+            <div style="font-size: 10px; color: #1aff1a;">> DECRYPTION_INPUT:</div>
+            <div style="display: flex; gap: 5px; margin-top: 5px;">
+                <input type="text" id="access-key" placeholder="KEY..." style="flex-grow:1; background:#000; border:1px solid #1aff1a; color:#1aff1a; font-family:'Courier New'; font-size:12px; padding:5px; outline:none;">
+                <button class="copy-btn" onclick="pasteKeyFromClipboard()">[PASTE]</button>
+            </div>
+            <button id="unlock-btn" onclick="checkAccessCode()" style="width:100%; margin-top:5px; font-size:10px;">EXECUTE_DECRYPTION</button>
+        </div>
+    </div>
+</div>
+
+<div id="radioPlayer">
+    <button onclick="playRadio()">PLAY</button> 
+    <button onclick="stopRadio()">STOP</button> 
+    <button onclick="nextTrack()">NEXT</button>
+</div>
+
+<audio id="radio" loop></audio>
+
+<script>
+// --- КОНФИГ И ДАННЫЕ ---
+const levels = [
+    { r: 18, p: 2 }, { r: 26, p: 4 }, { r: 34, p: 8 }, 
+    { r: 44, p: 16 }, { r: 54, p: 32 }, { r: 66, p: 64 }, 
+    { r: 78, p: 128 }, { r: 90, p: 256 }, { r: 105, p: 512 }, { r: 125, p: 1024 }
+];
+
+const LORE_DATABASE = {
+    events: [
+        "Обнаружен пакет 'Проект Эхо': Сектор был очищен принудительно.",
+        "Перехват: 'Сигнал затухает. Мы не успели эвакуировать архив'.",
+        "Отчет: Уровень радиации в норме для пост-человеческой эры.",
+        "Лог: Био-сигнатура 0. Протокол 'Сжатие' эффективен на 99%.",
+        "Аномалия: В руинах комплекса обнаружены самовоспроизводящиеся коды."
+    ],
+    getUniqueCode: () => "CORE-" + Math.random().toString(36).substring(2, 6).toUpperCase()
+};
+
+let app, engine, world;
+let score = 0, nextLevel = 0, currentBallBody = null, canSpawn = false, isGameOver = false;
+let activeKeys = {};
+let pendingUpdateIndex = -1;
+let loseLine; // Объект полосы
+let loseTimer = 0; // Таймер для проверки проигрыша
+const textures = {};
+
+// --- ЗАГРУЗКА ТЕРМИНАЛА ---
+const logElement = document.getElementById('boot-log');
+const bootScreen = document.getElementById('boot-screen');
+
+document.getElementById('start-overlay').addEventListener('click', async () => {
+    document.getElementById('start-overlay').style.display = 'none';
+    bootScreen.style.display = 'flex';
+    document.getElementById('radio').src = 'matrix.mp3';
+    document.getElementById('radio').play().catch(() => {});
+    
+    await runBootSequence();
+});
+
+async function runBootSequence() {
+    const lines = ["> INITIALIZING...", "> LOADING CORE...", "> ACCESS GRANTED.", "> STARTING PROTOCOL..."];
+    for (let line of lines) {
+        logElement.textContent += line + "\n";
+        await new Promise(r => setTimeout(r, 400));
+    }
+    
+    for (let i = 0; i < 30; i++) {
+        let hex = Array.from({length: 40}, () => Math.random().toString(16)[2]).join('');
+        logElement.textContent = `[0x${Math.random().toString(16).slice(2,6)}] ${hex}\n` + logElement.textContent;
+        await new Promise(r => setTimeout(r, 40));
+    }
+
+    logElement.innerHTML = "<div style='font-size:2rem; text-align:center; margin-top:20%;'>> SYSTEM READY</div>";
+    await new Promise(r => setTimeout(r, 1000));
+    bootScreen.style.display = 'none';
+    
+    initGame();
+}
+
+// --- ИГРОВАЯ ЛОГИКА ---
+async function initGame() {
+    app = new PIXI.Application({
+        width: 400, height: 600, backgroundAlpha: 0, antialias: true,
+        resolution: window.devicePixelRatio || 2, autoDensity: true
+    });
+    document.getElementById('game-container').appendChild(app.view);
+
+    engine = Matter.Engine.create();
+    world = engine.world;
+
+    // Стенки
+    Matter.World.add(world, [
+        Matter.Bodies.rectangle(200, 610, 400, 20, { isStatic: true }),
+        Matter.Bodies.rectangle(-10, 300, 20, 600, { isStatic: true }),
+        Matter.Bodies.rectangle(410, 300, 20, 600, { isStatic: true })
+    ]);
+
+    // Создание статичной полосы проигрыша
+    loseLine = new PIXI.Graphics();
+    loseLine.beginFill(0xff0000, 0.2); // Очень тусклый красный
+    loseLine.drawRect(0, 0, 400, 2);   // Тонкая линия
+    loseLine.endFill();
+    loseLine.y = 110; 
+    app.stage.addChild(loseLine);
+
+    // Загрузка текстур
+    for (let i = 0; i < 10; i++) {
+        try {
+            textures[i] = await PIXI.Assets.load(`${i+1}.png`);
+        } catch(e) { console.warn(`Missing: ${i+1}.png`); }
+    }
+
+    app.stage.eventMode = 'static';
+    app.stage.hitArea = app.screen;
+    
+    app.stage.on('pointermove', (e) => {
+        if (canSpawn && currentBallBody && !isGameOver) {
+            const radius = levels[currentBallBody.lvl].r;
+            let nx = Math.max(radius, Math.min(400 - radius, e.global.x));
+            Matter.Body.setPosition(currentBallBody, { x: nx, y: 60 });
+        }
+    });
+
+    app.stage.on('pointerup', () => {
+        if (canSpawn && currentBallBody && !isGameOver) {
+            canSpawn = false;
+            Matter.Body.setStatic(currentBallBody, false);
+            currentBallBody.isSensor = false;
+            currentBallBody = null;
+            setTimeout(spawnNew, 800);
+        }
+    });
+
+    Matter.Events.on(engine, 'collisionStart', (event) => {
+        event.pairs.forEach(pair => {
+            const a = pair.bodyA, b = pair.bodyB;
+            if (a.lvl !== undefined && a.lvl === b.lvl && a.lvl < 9 && !a.isMerging && !b.isMerging) {
+                a.isMerging = b.isMerging = true;
+                score += levels[a.lvl].p;
+                document.getElementById('current-score').innerText = score;
+                checkObjectStatus(score);
+                
+                const nx = (a.position.x + b.position.x) / 2;
+                const ny = (a.position.y + b.position.y) / 2;
+                const newLvl = a.lvl + 1;
+
+                setTimeout(() => {
+                    removeBall(a); removeBall(b);
+                    createBall(nx, ny, newLvl, true);
+                }, 10);
+            }
+        });
+    });
+
+    app.ticker.add(() => {
+        Matter.Engine.update(engine, app.ticker.deltaMS);
+        
+        let isAnyBodyAbove = false;
+
+        world.bodies.forEach(body => {
+            if (body.sprite) {
+                body.sprite.x = body.position.x;
+                body.sprite.y = body.position.y;
+                body.sprite.rotation = body.angle;
+
+                // Проверка проигрыша: если упавший шар (не статик) выше линии 110
+                if (!body.isStatic && body.position.y < 110 && !body.isMerging) {
+                    isAnyBodyAbove = true;
+                }
+            }
+        });
+
+        if (isAnyBodyAbove && !isGameOver) {
+            loseTimer += app.ticker.deltaMS;
+            if (loseTimer > 1500) { // 1.5 секунды над линией — конец
+                triggerGameOver();
+            }
+        } else {
+            loseTimer = 0;
+        }
+    });
+
+    spawnNew();
+}
+
+function createBall(x, y, lvl, isFalling) {
+    const radius = levels[lvl].r;
+    const container = new PIXI.Container();
+    const sprite = new PIXI.Sprite(textures[lvl]);
+    sprite.anchor.set(0.5);
+    sprite.width = sprite.height = radius * 2;
+
+    const mask = new PIXI.Graphics().beginFill(0xffffff).drawCircle(0, 0, radius).endFill();
+    sprite.mask = mask;
+    container.addChild(sprite, mask);
+    app.stage.addChild(container);
+
+    const body = Matter.Bodies.circle(x, y, radius, {
+        restitution: 0.3, isStatic: !isFalling, isSensor: !isFalling
+    });
+    body.lvl = lvl; body.sprite = container;
+    Matter.World.add(world, body);
+    return body;
+}
+
+function removeBall(body) {
+    if (body.sprite) app.stage.removeChild(body.sprite);
+    Matter.World.remove(world, body);
+}
+
+function spawnNew() {
+    if(isGameOver) return;
+    currentBallBody = createBall(200, 60, nextLevel, false);
+    nextLevel = Math.floor(Math.random() * 4);
+    const ni = document.getElementById('next-img');
+    ni.src = `${nextLevel + 1}.png`;
+    ni.style.display = 'block';
+    canSpawn = true;
+}
+
+function triggerGameOver() {
+    isGameOver = true;
+    canSpawn = false;
+    const lore = document.getElementById('lore-display');
+    lore.style.display = "block";
+    lore.innerHTML = `<span style='color:#ff1a1a; font-size: 14px;'>[SYSTEM_FAILURE]</span><br>Критическое переполнение буфера. Работа прекращена.`;
+    document.body.style.animation = "pulse-red 0.5s infinite";
+}
+
+// --- СИСТЕМА СОСТОЯНИЙ ---
+const stateThresholds = [500, 1500, 3000, 5000];
+const confirmBtn = document.getElementById('confirm-btn');
+
+function checkObjectStatus(s) {
+    stateThresholds.forEach((t, i) => {
+        const img = document.getElementById(`img-${i}`);
+        if (s >= t && pendingUpdateIndex === -1 && img && !img.src.includes('ruins')) {
+            pendingUpdateIndex = i;
+            confirmBtn.disabled = false;
+            confirmBtn.classList.add('pending-action');
+            document.getElementById(`obj-${i}`).style.animation = "pulse-red 1s infinite";
+        }
+    });
+}
+
+confirmBtn.addEventListener('click', () => {
+    if (pendingUpdateIndex === -1) return;
+    const i = pendingUpdateIndex;
+    const code = LORE_DATABASE.getUniqueCode();
+    activeKeys[code] = `> СЕКТОР_${i+1}: ${LORE_DATABASE.events[Math.floor(Math.random()*5)]}`;
+
+    const lore = document.getElementById('lore-display');
+    lore.style.display = "block";
+    lore.innerHTML = `<span style='color:#ff1a1a;'>[KEY]:</span> <b>${code}</b> <button class='copy-btn' onclick="navigator.clipboard.writeText('${code}')">[COPY]</button>`;
+
+    const img = document.getElementById(`img-${i}`);
+    if(img) img.src = `ruins${i+1}.png`; 
+    
+    confirmBtn.disabled = true;
+    confirmBtn.classList.remove('pending-action');
+    document.getElementById(`obj-${i}`).style.animation = "none";
+    pendingUpdateIndex = -1;
+});
+
+function checkAccessCode() {
+    const val = document.getElementById('access-key').value.trim().toUpperCase();
+    const lore = document.getElementById('lore-display');
+    lore.style.display = "block";
+    if (activeKeys[val]) {
+        lore.innerHTML = `<span style='color:#1aff1a;'>[DECRYPTED]</span><br>${activeKeys[val]}`;
+        document.getElementById('access-key').value = "";
+    } else {
+        lore.innerHTML = `<span style='color:#550000;'>[INVALID_KEY]</span>`;
+    }
+}
+
+// --- РАДИО ---
+const tracks = ["radio_static.mp3", "rad_low.mp3"];
+let currentTrack = 0;
+const r = document.getElementById('radio');
+function playRadio(){ r.src = tracks[currentTrack]; r.play(); }
+function stopRadio(){ r.pause(); }
+function nextTrack(){ currentTrack = (currentTrack + 1) % tracks.length; playRadio(); }
+async function pasteKeyFromClipboard() {
+    try {
+        const text = await navigator.clipboard.readText();
+        document.getElementById('access-key').value = text;
+    } catch(e) { console.warn("Clipboard error"); }
+}
+</script>
+</body>
+</html>
